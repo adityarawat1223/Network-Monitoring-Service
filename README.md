@@ -31,7 +31,7 @@ Returns:
 
 ```json
 {
-  "CpuUsage": 0.15625,
-  "MemoryUsage": 539168.0,
-  "UpTime": "Total Uptime is 5863.45"
+  "CpuUsage": 0.0,
+  "MemoryUsage": 7.0,
+  "UpTime": "System Uptime is 1 Hr and 51 Mins"
 }

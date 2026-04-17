@@ -1,14 +1,13 @@
 package com.api_gateway.networkmonitoringservice.Controller;
 import com.api_gateway.networkmonitoringservice.dto.Response;
-import net.schmizz.sshj.connection.ConnectionException;
 import net.schmizz.sshj.connection.channel.direct.Session;
-import net.schmizz.sshj.transport.TransportException;
 import net.schmizz.sshj.transport.verification.PromiscuousVerifier;
+import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 import net.schmizz.sshj.SSHClient;
-import java.io.IOException;
-import java.io.InputStream;
+import java.io.*;
 import java.util.ArrayList;
 import java.util.Scanner;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -22,29 +21,27 @@ public class SshController {
     public SshController(StringRedisTemplate redis) {
         this.redis = redis;
     }
+    static InputStream toStream(String line) {
+        return new ByteArrayInputStream(line.getBytes());
+    }
 
-    private ArrayList<Integer> Reader(InputStream val){
+    private ArrayList<Long> Reader(InputStream val){
         try(Scanner sc = new Scanner(val)) {
             sc.next();
-            ArrayList<Integer> arr = new ArrayList<>();
-            while (arr.size() < 8 && sc.hasNextInt()) {
-                arr.add(sc.nextInt());
+            ArrayList<Long> arr = new ArrayList<>();
+            while (arr.size() < 8 && sc.hasNextLong()) {
+                arr.add(sc.nextLong());
             }
             return arr;
         }
     }
 
-    private double CpuCalc(SSHClient ssh) throws TransportException, ConnectionException {
-        ArrayList<Integer> arr;
+    private double CpuCalc(InputStream stream)  {
+        ArrayList<Long> arr;
 
         String totstring = redis.opsForValue().get("total");
         String idlestring =  redis.opsForValue().get("idle");
-        try (Session session = ssh.startSession();
-             Session.Command cmd = session.exec("grep '^cpu ' /proc/stat")) {
-            arr = Reader(cmd.getInputStream());
-        }
-
-
+        arr = Reader(stream);
         long tot1 = 0, tot2 = 0 , idle1 = (arr.get(3) + arr.get(4)) , idle2 = 0;
         for (var ele : arr) tot1 += ele;
 
@@ -63,54 +60,68 @@ public class SshController {
         if (totalDelta < 0) return 0.0;
         return totalDelta == 0 ? 0.0 : ((double)(totalDelta - idleDelta) / totalDelta) * 100.0;
     }
-    private double MemCalc(SSHClient ssh) throws TransportException, ConnectionException {
+    private double MemCalc(InputStream stream1 , InputStream stream2) {
         double Total, Free;
-        try (Session session = ssh.startSession();
-             Session.Command cmd = session.exec("grep '^MemTotal' /proc/meminfo")) {
-            try(Scanner sc = new Scanner(cmd.getInputStream())) {
+            try(Scanner sc = new Scanner(stream1)) {
                 sc.next();
                 Total = sc.nextInt();
             }
-        }
-
-        try (Session session = ssh.startSession();
-             Session.Command cmd = session.exec("grep '^MemAvailable' /proc/meminfo")) {
-            try(Scanner sc = new Scanner(cmd.getInputStream())) {
+            try(Scanner sc = new Scanner(stream2)) {
                 sc.next();
                 Free = sc.nextInt();
             }
-        }
-        return Total - Free;
+
+        return ((Total - Free) / Total) * 100;
     }
-    private double Uptime(SSHClient ssh) throws TransportException, ConnectionException {
-        try (Session session = ssh.startSession();
-             Session.Command cmd = session.exec("cat /proc/uptime")) {
-            try(Scanner sc = new Scanner(cmd.getInputStream())) {
+    private double Uptime(InputStream stream) {
+
+            try(Scanner sc = new Scanner(stream)) {
                 return sc.nextDouble();
             }
-        }
+
     }
 
+    private ArrayList<InputStream> InputGiver  (SSHClient ssh) throws  IOException{
+        ArrayList<InputStream>arr = new ArrayList<>();
+        try (Session session = ssh.startSession()){
+            String command = "grep '^cpu ' /proc/stat;grep '^MemTotal' /proc/meminfo; grep '^MemAvailable' /proc/meminfo;cat /proc/uptime";
+            Session.Command cmd = session.exec(command);
 
-    @GetMapping("/sysinfo")
-    public Response execute() throws IOException {
+            BufferedReader reader = new BufferedReader(new InputStreamReader(cmd.getInputStream()));
+            arr.add(toStream(reader.readLine()));
+            arr.add(toStream(reader.readLine()));
+            arr.add(toStream(reader.readLine()));
+            arr.add(toStream(reader.readLine()));
+        }
+
+        return arr;
+    }
+    @Scheduled(fixedDelay = 30000)
+    public void SysPoller ()  throws IOException {
 
         try (SSHClient ssh = new SSHClient()) {
-
             ssh.addHostKeyVerifier(new PromiscuousVerifier());
-            String remoteHost = "172.22.29.205";
-            ssh.connect(remoteHost);
-            String username = "burstingfire355";
-            ssh.authPublickey(username, privateKeyPath);
-
-            Response response = new Response();
-            response.CpuUsage = CpuCalc(ssh);
-            response.MemoryUsage = MemCalc(ssh);
-            double uptime = Uptime(ssh);
-            response.UpTime = "Total Uptime is " + (uptime) / 3600 + " hr and " + ((uptime % 3600) / 60) + "mins";
-            return response;
-
+            ssh.connect("172.22.29.205");
+            ssh.authPublickey("burstingfire355", privateKeyPath);
+            ArrayList<InputStream> arr = InputGiver(ssh);
+            redis.opsForValue().set("CpuUsage", Double.toString(CpuCalc(arr.get(0))));
+            redis.opsForValue().set("MemUsage", Double.toString(MemCalc(arr.get(1) , arr.get(2))));
+            redis.opsForValue().set("UpTime", Double.toString(Uptime(arr.get(3))));
         }
+
+    }
+    @GetMapping("/sysinfo")
+    public Response execute()  {
+
+        Response response = new Response();
+        String CpuUsage = redis.opsForValue().get("CpuUsage");
+        String MemUsage = redis.opsForValue().get("MemUsage");
+        String Uptime = redis.opsForValue().get("UpTime");
+        double temp = (Uptime == null ? 0 : Double.parseDouble(Uptime));
+        response.CpuUsage = (CpuUsage == null ? 0 : Math.round(Double.parseDouble(CpuUsage))) ;
+        response.MemoryUsage = (MemUsage == null ? 0 : Math.round(Double.parseDouble(MemUsage))) ;
+        response.UpTime = "System Uptime is " + Math.round(temp / 3600) + " Hr and " + Math.round((temp%3600)/60) + " Mins";
+        return response;
 
     }
 }
