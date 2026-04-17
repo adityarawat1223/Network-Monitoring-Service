@@ -2,7 +2,6 @@ package com.api_gateway.networkmonitoringservice.Controller;
 import com.api_gateway.networkmonitoringservice.dto.Response;
 import net.schmizz.sshj.connection.channel.direct.Session;
 import net.schmizz.sshj.transport.verification.PromiscuousVerifier;
-import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -104,9 +103,24 @@ public class SshController {
             ssh.connect("172.22.29.205");
             ssh.authPublickey("burstingfire355", privateKeyPath);
             ArrayList<InputStream> arr = InputGiver(ssh);
-            redis.opsForValue().set("CpuUsage", Double.toString(CpuCalc(arr.get(0))));
+            double CpuUsage = CpuCalc(arr.get(0));
+            redis.opsForValue().set("CpuUsage",Double.toString(CpuUsage) );
             redis.opsForValue().set("MemUsage", Double.toString(MemCalc(arr.get(1) , arr.get(2))));
             redis.opsForValue().set("UpTime", Double.toString(Uptime(arr.get(3))));
+            String countStr = redis.opsForValue().get("cpu:high_count");
+
+            int count = (countStr == null ? 0 : Integer.parseInt(countStr));
+            if (CpuUsage > 90) {
+                count++;
+            } else {
+                count = 0;
+            }
+
+            redis.opsForValue().set("cpu:high_count", String.valueOf(count));
+
+            if (count >= 10) {
+                System.out.println("ALERT: CPU HIGH FOR 5 MIN");
+            }
         }
 
     }
