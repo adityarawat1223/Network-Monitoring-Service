@@ -5,9 +5,9 @@
 
 ## Overview
 
-A backend service that connects to remote Linux machines using SSH and retrieves real-time system metrics like CPU usage, memory usage, and uptime.
+A backend service that monitors a remote Linux server using SSH and provides real-time system metrics.
 
-This project focuses on interacting with actual systems rather than just building APIs. It executes commands remotely, parses raw output, and exposes structured metrics via REST endpoints.
+The system uses **scheduled polling + Redis** to collect and serve metrics efficiently, along with a basic health alert mechanism.
 
 ---
 
@@ -35,3 +35,32 @@ Returns:
   "MemoryUsage": 7.0,
   "UpTime": "System Uptime is 1 Hr and 51 Mins"
 }
+```
+
+## Prerequisites
+
+1. Java 17
+2. Redis
+3. Linux Based Server 
+4. Private Key from Linux Server
+
+## Usage
+
+```Java
+ssh.connect("172.22.29.205");
+ssh.authPublickey("burstingfire355", privateKeyPath);
+```
+Add your Host address , Name and Private Key path Here
+and Start the Application
+
+```Java
+gradlew.bat bootRun ; // windows
+```
+
+## Linux Command Used
+
+```linux
+cat /proc/stat  (cpu info)
+cat /proc/meminfo (mem info)
+cat /proc/uptime (uptime info)
+```
